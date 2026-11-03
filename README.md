@@ -104,9 +104,9 @@ PULSE-1.2B is trained on a single commodity 16 GB consumer GPU:
 | **Peak VRAM Allocated** | **9,866.9 MB / 15,838.8 MB (62.3%)** |
 | **Clean Headroom** | **6,436.0 MB (6.44 GB completely free)** |
 | **Reversible Inversion Drift** | Machine Epsilon ($< 1.19 \times 10^{-7}$) |
-| **Current Progress** | **Step 591 / 1000 (59.1% Complete! — 77.46M tokens processed)** |
-| **Loss Descent** | $11.3819 \to \mathbf{8.3074}$ (Smooth: $\mathbf{8.3118}$) |
-| **Gradient Norm** | $10.31 \to \mathbf{0.0337}$ (All-time ground-state minimum) |
+| **Current Progress** | **Step 622 / 1000 (62.2% Complete! — 81.53M tokens processed)** |
+| **Loss Descent** | $11.3819 \to \mathbf{8.3074}$ (Smooth: $\mathbf{8.3110}$) |
+| **Gradient Norm** | $10.31 \to \mathbf{0.0322}$ (All-time ground-state minimum) |
 
 ---
 
