@@ -3,9 +3,14 @@ import sys
 import time
 import math
 import argparse
+import shutil
 import numpy as np
 import torch
 import torch.nn.functional as F
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, "/workspace/ulse_engine")
+
 from transformers import AutoTokenizer
 from model import ULSEConfig, ULSEModel, MuonOptimizer
 
@@ -25,6 +30,7 @@ def parse_args():
     parser.add_argument("--out-dir", type=str, default="/workspace/pulse_checkpoints", help="Output directory")
     parser.add_argument("--tokenizer", type=str, default="HuggingFaceTB/cosmo2-tokenizer", help="HuggingFace tokenizer")
     parser.add_argument("--cache-dir", type=str, default="/workspace/hf_cache", help="HF cache dir")
+    parser.add_argument("--resume", type=str, default="", help="Path to checkpoint to resume from")
     return parser.parse_args()
 
 
@@ -94,19 +100,38 @@ def main():
     # 4. Dataset Streamer
     streamer = SyntheticTextStream(vocab_size=vocab_size, seq_len=args.seq_len, device=device)
 
-    # 5. Training Loop
+    # 5. Training Loop Setup & Checkpoint Resumption
+    start_step = 1
+    running_loss = 0.0
+
+    if args.resume and os.path.exists(args.resume):
+        print(f"\n[Resume] Loading checkpoint from {args.resume}...")
+        ckpt = torch.load(args.resume, map_location=device, weights_only=False)
+        model.load_state_dict(ckpt["model_state"])
+        if "opt_muon" in ckpt and ckpt["opt_muon"]:
+            try:
+                opt_muon.load_state_dict(ckpt["opt_muon"])
+            except Exception as e:
+                print(f"[Warning] Could not load opt_muon state: {e}")
+        if "opt_adam" in ckpt and ckpt["opt_adam"]:
+            try:
+                opt_adam.load_state_dict(ckpt["opt_adam"])
+            except Exception as e:
+                print(f"[Warning] Could not load opt_adam state: {e}")
+        start_step = ckpt.get("step", 0) + 1
+        running_loss = ckpt.get("loss", 0.0)
+        print(f"[Resume] Successfully loaded checkpoint! Resuming pretraining from Step {start_step:04d} (Loss: {running_loss:.4f})")
+
     print("\n[Pretraining Launch] Commencing PULSE pretraining...")
     model.train()
     tokens_per_micro = args.batch_size * args.seq_len
     tokens_per_step = tokens_per_micro * args.grad_accum
 
-    global_step = 0
     t_start = time.perf_counter()
-    running_loss = 0.0
 
     torch.cuda.reset_peak_memory_stats(device)
 
-    for opt_step in range(1, args.total_steps + 1):
+    for opt_step in range(start_step, args.total_steps + 1):
         t_step0 = time.perf_counter()
         opt_muon.zero_grad(set_to_none=True)
         opt_adam.zero_grad(set_to_none=True)
@@ -156,10 +181,11 @@ def main():
             flush=True
         )
 
-        # Checkpointing
+        # Checkpointing (Robust Atomic Save with Retries)
         if opt_step % args.save_every == 0 or opt_step == args.total_steps:
             ckpt_path = os.path.join(args.out_dir, f"pulse_step{opt_step:04d}.pt")
             latest_path = os.path.join(args.out_dir, "pulse_latest.pt")
+            tmp_path = ckpt_path + ".tmp"
             state = {
                 "step": opt_step,
                 "model_state": model.state_dict(),
@@ -169,9 +195,13 @@ def main():
                 "vocab_size": vocab_size,
                 "cfg": cfg
             }
-            torch.save(state, ckpt_path)
-            torch.save(state, latest_path)
-            print(f"  --> [Checkpoint] Saved atomic state to {ckpt_path}", flush=True)
+            try:
+                torch.save(state, tmp_path)
+                os.replace(tmp_path, ckpt_path)
+                shutil.copyfile(ckpt_path, latest_path)
+                print(f"  --> [Checkpoint] Saved atomic state to {ckpt_path}", flush=True)
+            except Exception as e:
+                print(f"  --> [Checkpoint Warning] Failed to save state at step {opt_step}: {e}", flush=True)
 
     total_wall = time.perf_counter() - t_start
     total_tokens = args.total_steps * tokens_per_step
